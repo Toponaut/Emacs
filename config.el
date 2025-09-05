@@ -134,13 +134,107 @@
   "Display current date and time."
   (format-time-string "  %d-%m-%Y  %H:%M "))
 
+;; Cache variables to avoid recursive calls
+(defvar exwm-volume-cache "  VOL:[--] ")
+(defvar exwm-volume-cache-time 0)
+(defvar exwm-brightness-cache "  BRI:[--] ")
+(defvar exwm-brightness-cache-time 0)
+
+;; Volume control functions
+(defun exwm-volume-up ()
+  "Increase volume by 5%."
+  (interactive)
+  (start-process-shell-command "pactl" nil "pactl set-sink-volume @DEFAULT_SINK@ +5%")
+  (setq exwm-volume-cache-time 0)
+  (run-with-timer 0.1 nil (lambda () (force-mode-line-update t))))
+
+(defun exwm-volume-down ()
+  "Decrease volume by 5%."
+  (interactive)
+  (start-process-shell-command "pactl" nil "pactl set-sink-volume @DEFAULT_SINK@ -5%")
+  (setq exwm-volume-cache-time 0)
+  (run-with-timer 0.1 nil (lambda () (force-mode-line-update t))))
+
+(defun exwm-volume-mute-toggle ()
+  "Toggle volume mute."
+  (interactive)
+  (start-process-shell-command "pactl" nil "pactl set-sink-mute @DEFAULT_SINK@ toggle")
+  (setq exwm-volume-cache-time 0)
+  (run-with-timer 0.1 nil (lambda () (force-mode-line-update t))))
+
+;; Update volume cache function
+(defun exwm-update-volume-cache ()
+  "Update volume cache if needed."
+  (let ((current-time (float-time)))
+    (when (> (- current-time exwm-volume-cache-time) 2.0)
+      (condition-case nil
+          (let* ((volume-str (shell-command-to-string "pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'"))
+                 (volume (if (string-empty-p (string-trim volume-str)) 0 (string-to-number (string-trim volume-str))))
+                 (mute-str (shell-command-to-string "pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null"))
+                 (is-muted (string-match "yes" mute-str))
+                 (bar-length 8)
+                 (filled-bars (if is-muted 0 (/ (* volume bar-length) 100)))
+                 (empty-bars (- bar-length filled-bars))
+                 (bar (concat (make-string filled-bars ?█) (make-string empty-bars ?░))))
+            (setq exwm-volume-cache (if is-muted "  VOL:[MUTED] " (format "  VOL:[%s]%d%% " bar volume))
+                  exwm-volume-cache-time current-time))
+        (error (setq exwm-volume-cache "  VOL:[ERR] " exwm-volume-cache-time current-time))))))
+
+;; Terminal-style volume indicator
+(defun exwm-volume-display ()
+  "Display volume level with terminal-style bar."
+  (exwm-update-volume-cache)
+  exwm-volume-cache)
+
+;; Brightness control functions
+(defun exwm-brightness-up ()
+  "Increase brightness by 5%."
+  (interactive)
+  (start-process-shell-command "brightnessctl" nil "brightnessctl set +5%")
+  (setq exwm-brightness-cache-time 0)
+  (run-with-timer 0.1 nil (lambda () (force-mode-line-update t))))
+
+(defun exwm-brightness-down ()
+  "Decrease brightness by 5%."
+  (interactive)
+  (start-process-shell-command "brightnessctl" nil "brightnessctl set 5%-")
+  (setq exwm-brightness-cache-time 0)
+  (run-with-timer 0.1 nil (lambda () (force-mode-line-update t))))
+
+;; Update brightness cache function
+(defun exwm-update-brightness-cache ()
+  "Update brightness cache if needed."
+  (let ((current-time (float-time)))
+    (when (> (- current-time exwm-brightness-cache-time) 2.0)
+      (condition-case nil
+          (let* ((brightness-str (shell-command-to-string "brightnessctl get 2>/dev/null"))
+                 (max-brightness-str (shell-command-to-string "brightnessctl max 2>/dev/null"))
+                 (current-brightness (string-to-number (string-trim brightness-str)))
+                 (max-brightness (string-to-number (string-trim max-brightness-str)))
+                 (brightness-percent (if (> max-brightness 0) (/ (* current-brightness 100) max-brightness) 0))
+                 (bar-length 8)
+                 (filled-bars (/ (* brightness-percent bar-length) 100))
+                 (empty-bars (- bar-length filled-bars))
+                 (bar (concat (make-string filled-bars ?█) (make-string empty-bars ?░))))
+            (setq exwm-brightness-cache (format "  BRI:[%s]%d%% " bar (round brightness-percent))
+                  exwm-brightness-cache-time current-time))
+        (error (setq exwm-brightness-cache "  BRI:[N/A] " exwm-brightness-cache-time current-time))))))
+
+;; Terminal-style brightness indicator  
+(defun exwm-brightness-display ()
+  "Display brightness level with terminal-style bar."
+  (exwm-update-brightness-cache)
+  exwm-brightness-cache)
+
 ;; Load Launcher module
 (add-to-list 'load-path (expand-file-name "modules" doom-user-dir))
 (require 'exwm-launcher)
 
-;; Configure modeline with workspace and datetime only
+;; Configure modeline with workspace, volume, brightness and datetime
 (setq global-mode-string
       '((:eval (exwm-workspace-display))
+        (:eval (exwm-volume-display))
+        (:eval (exwm-brightness-display))
         (:eval (exwm-datetime-display))))
 
 ;; Global keybindings.
@@ -350,17 +444,13 @@
                     (lambda () (interactive)
                       (start-process-shell-command "playerctl" nil "playerctl previous")))
 
-(exwm-input-set-key (kbd "<XF86AudioRaiseVolume>")
-                    (lambda () (interactive)
-                      (start-process-shell-command "pactl" nil "pactl set-sink-volume @DEFAULT_SINK@ +5%")))
+(exwm-input-set-key (kbd "<XF86AudioRaiseVolume>") 'exwm-volume-up)
+(exwm-input-set-key (kbd "<XF86AudioLowerVolume>") 'exwm-volume-down)
+(exwm-input-set-key (kbd "<XF86AudioMute>") 'exwm-volume-mute-toggle)
 
-(exwm-input-set-key (kbd "<XF86AudioLowerVolume>")
-                    (lambda () (interactive)
-                      (start-process-shell-command "pactl" nil "pactl set-sink-volume @DEFAULT_SINK@ -5%")))
-
-(exwm-input-set-key (kbd "<XF86AudioMute>")
-                    (lambda () (interactive)
-                      (start-process-shell-command "pactl" nil "pactl set-sink-mute @DEFAULT_SINK@ toggle")))
+;; Brightness control
+(exwm-input-set-key (kbd "<XF86MonBrightnessUp>") 'exwm-brightness-up)
+(exwm-input-set-key (kbd "<XF86MonBrightnessDown>") 'exwm-brightness-down)
 
 
 
