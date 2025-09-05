@@ -243,12 +243,18 @@
     ;; Kill any orphaned trayer processes first
     (start-process-shell-command "kill-trayer" nil "pkill -f trayer")
     (run-with-timer 0.3 nil (lambda ()
-      (start-process "trayer" nil "trayer" 
-                     "--edge" "top" "--align" "right" 
-                     "--SetDockType" "true" "--SetPartialStrut" "true"
-                     "--expand" "false" "--widthtype" "pixel" "--width" "120"
-                     "--heighttype" "pixel" "--height" "20"
-                     "--transparent" "true" "--alpha" "256" "--tint" "0x00000000"))))
+      (let* ((screen-width (x-display-pixel-width))
+             (tray-width (min 150 (/ screen-width 10)))  ; Adaptive width
+             (tray-height (if (> screen-width 1600) 24 20)))  ; Adaptive height
+        (start-process "trayer" nil "trayer" 
+                       "--edge" "top" "--align" "right" 
+                       "--SetDockType" "true" "--SetPartialStrut" "true"
+                       "--expand" "false" "--widthtype" "pixel" 
+                       "--width" (number-to-string tray-width)
+                       "--heighttype" "pixel" 
+                       "--height" (number-to-string tray-height)
+                       "--transparent" "true" "--alpha" "256" 
+                       "--tint" "0x00000000" "--distance" "2")))))
   
   ;; Start applets only if not running
   (unless (get-process "nm-applet")
