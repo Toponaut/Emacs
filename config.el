@@ -220,15 +220,26 @@
 
 (defun exwm-update-all-borders ()
   "Update border colors for all windows based on focus."
-  (exwm-clear-inactive-borders)
-  (exwm-update-top-border-color))
+  (when (and (fboundp 'exwm-clear-inactive-borders)
+             (fboundp 'exwm-update-top-border-color))
+    (ignore-errors
+      (exwm-clear-inactive-borders)
+      (exwm-update-top-border-color))))
 
 ;; Update border color when input mode changes
 (add-hook 'exwm-input-input-mode-change-hook #'exwm-update-top-border-color)
-(add-hook 'window-selection-change-functions (lambda (&rest _) (exwm-update-all-borders)))
-(add-hook 'buffer-list-update-hook #'exwm-update-all-borders)
-(add-hook 'focus-in-hook #'exwm-update-all-borders)
-(add-hook 'mouse-leave-buffer-hook #'exwm-update-all-borders)
+(add-hook 'window-selection-change-functions 
+          (lambda (&rest _) 
+            (ignore-errors (exwm-update-all-borders))))
+(add-hook 'buffer-list-update-hook 
+          (lambda () 
+            (ignore-errors (exwm-update-all-borders))))
+(add-hook 'focus-in-hook 
+          (lambda () 
+            (ignore-errors (exwm-update-all-borders))))
+(add-hook 'mouse-leave-buffer-hook 
+          (lambda () 
+            (ignore-errors (exwm-update-all-borders))))
 
 ;; Set default X cursor
 (setq x-pointer-shape x-pointer-hand2)
