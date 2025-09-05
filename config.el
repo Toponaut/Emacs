@@ -230,6 +230,10 @@
 (add-hook 'focus-in-hook #'exwm-update-all-borders)
 (add-hook 'mouse-leave-buffer-hook #'exwm-update-all-borders)
 
+;; Set default X cursor
+(setq x-pointer-shape x-pointer-hand2)
+(set-mouse-color "white")
+
 ;; Enable EXWM
 (exwm-wm-mode)
 
@@ -268,6 +272,9 @@
 
 ;; Start system tray after a brief delay
 (run-with-timer 1.0 nil #'my/start-system-tray)
+
+;; Set root window cursor to avoid X cursor
+(start-process-shell-command "xsetroot-cursor" nil "xsetroot -cursor_name hand2")
 
 
 ;; Picom
