@@ -270,8 +270,8 @@
   (unless (get-process "protonvpn-app")
     (start-process "protonvpn-app" nil "protonvpn-app")))
 
-;; Start system tray after a brief delay
-(run-with-timer 1.0 nil #'my/start-system-tray)
+;; Hook system tray startup into EXWM initialization
+(add-hook 'exwm-init-hook #'my/start-system-tray)
 
 ;; Set root window cursor to avoid X cursor
 (start-process-shell-command "xsetroot-cursor" nil "xsetroot -cursor_name hand2")
