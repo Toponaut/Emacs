@@ -34,13 +34,22 @@
 (add-hook 'org-mode-hook 'org-fragtog-mode)
 
 ;; org-babel
-(org-babel-do-load-languages
- 'org-babel-load-languages
- '((emacs-lisp . t)
-   (python . t)
-   (jupyter-python . t)))
-
-(setq org-confirm-babel-evaluate nil)
+(after! org
+  (org-babel-do-load-languages
+   'org-babel-load-languages
+   '((emacs-lisp . t)
+     (python . t)
+     (jupyter-python . t)))
+  
+  (setq org-confirm-babel-evaluate nil)
+  (setq org-babel-python-command "python")
+  
+  ;; Ensure pyenv works with Emacs
+  (setenv "PATH" (concat (getenv "HOME") "/.pyenv/shims:" (getenv "PATH")))
+  (setq exec-path (cons (concat (getenv "HOME") "/.pyenv/shims") exec-path))
+  
+  ;; Force reload ob-python
+  (require 'ob-python))
 
 ;; EIN polymode fix
 (defun pm--visible-buffer-name (&optional buffer)
