@@ -199,70 +199,88 @@
                         (interactive)
                         (exwm-workspace-switch-create ,i))))
                   (number-sequence 0 9))))
+;; Safe X protocol operations with error handling
+(defun my/safe-xcb-request (request-fn)
+  "Safely execute an XCB request with error handling."
+  (condition-case err
+      (funcall request-fn)
+    (error
+     (message "XCB request failed: %s" err)
+     nil)))
+
 ;; Visual indicator for EXWM input mode via border color
 (defun exwm-update-top-border-color ()
   "Update window border with colored edge, adjusting size to fit screen."
   (when (and (derived-mode-p 'exwm-mode) exwm--id 
-             (eq (current-buffer) (window-buffer (selected-window))))
-    (let* ((border-pixel (if (eq exwm--input-mode 'line-mode)
-                            16745843  ; Gruvbox muted orange for line-mode (0xff9e73)
-                          8355711))  ; Gruvbox muted blue for char-mode (0x7f849c)
-           (geometry (xcb:+request-unchecked+reply exwm--connection
-                        (make-instance 'xcb:GetGeometry :drawable exwm--id)))
-           (width (slot-value geometry 'width))
-           (height (slot-value geometry 'height))
-           (x (slot-value geometry 'x))
-           (y (slot-value geometry 'y)))
-      ;; Adjust window size to account for border
-      (when (> (+ x width) (- (x-display-pixel-width) 2))
-        (xcb:+request exwm--connection
-            (make-instance 'xcb:ConfigureWindow
-                           :window exwm--id
-                           :value-mask xcb:ConfigWindow:Width
-                           :width (- width 2))))
-      ;; Set thin border
-      (xcb:+request exwm--connection
-          (make-instance 'xcb:ConfigureWindow
-                         :window exwm--id
-                         :value-mask xcb:ConfigWindow:BorderWidth
-                         :border-width 1))
-      ;; Set border color
-      (xcb:+request exwm--connection
-          (make-instance 'xcb:ChangeWindowAttributes
-                         :window exwm--id
-                         :value-mask xcb:CW:BorderPixel
-                         :border-pixel border-pixel))
-      (xcb:flush exwm--connection))))
+             (eq (current-buffer) (window-buffer (selected-window)))
+             exwm--connection)
+    (my/safe-xcb-request
+     (lambda ()
+       (let* ((border-pixel (if (eq exwm--input-mode 'line-mode)
+                               16745843  ; Gruvbox muted orange for line-mode
+                             8355711))  ; Gruvbox muted blue for char-mode
+              (geometry (xcb:+request-unchecked+reply exwm--connection
+                           (make-instance 'xcb:GetGeometry :drawable exwm--id))))
+         (when geometry
+           (let ((width (slot-value geometry 'width))
+                 (height (slot-value geometry 'height))
+                 (x (slot-value geometry 'x))
+                 (y (slot-value geometry 'y)))
+             ;; Adjust window size to account for border
+             (when (> (+ x width) (- (x-display-pixel-width) 2))
+               (xcb:+request exwm--connection
+                   (make-instance 'xcb:ConfigureWindow
+                                  :window exwm--id
+                                  :value-mask xcb:ConfigWindow:Width
+                                  :width (- width 2))))
+             ;; Set thin border
+             (xcb:+request exwm--connection
+                 (make-instance 'xcb:ConfigureWindow
+                                :window exwm--id
+                                :value-mask xcb:ConfigWindow:BorderWidth
+                                :border-width 1))
+             ;; Set border color
+             (xcb:+request exwm--connection
+                 (make-instance 'xcb:ChangeWindowAttributes
+                                :window exwm--id
+                                :value-mask xcb:CW:BorderPixel
+                                :border-pixel border-pixel))
+             (xcb:flush exwm--connection))))))))
 
 (defun exwm-update-border-width ()
   "Set border width for EXWM windows."
-  (when (and (derived-mode-p 'exwm-mode) exwm--id)
-    (xcb:+request exwm--connection
-        (make-instance 'xcb:ConfigureWindow
-                       :window exwm--id
-                       :value-mask xcb:ConfigWindow:BorderWidth
-                       :border-width 1
-                       ))
-    (xcb:flush exwm--connection)))
+  (when (and (derived-mode-p 'exwm-mode) exwm--id exwm--connection)
+    (my/safe-xcb-request
+     (lambda ()
+       (xcb:+request exwm--connection
+           (make-instance 'xcb:ConfigureWindow
+                          :window exwm--id
+                          :value-mask xcb:ConfigWindow:BorderWidth
+                          :border-width 1))
+       (xcb:flush exwm--connection)))))
 
 (defun exwm-clear-inactive-borders ()
   "Remove borders from inactive EXWM windows."
-  (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when (and (derived-mode-p 'exwm-mode) exwm--id
-                 (not (eq buffer (window-buffer (selected-window)))))
-        ;; Remove border completely
-        (xcb:+request exwm--connection
-            (make-instance 'xcb:ConfigureWindow
-                           :window exwm--id
-                           :value-mask xcb:ConfigWindow:BorderWidth
-                           :border-width 0))
-        (xcb:flush exwm--connection)))))
+  (when exwm--connection
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'exwm-mode) exwm--id
+                   (not (eq buffer (window-buffer (selected-window)))))
+          (my/safe-xcb-request
+           (lambda ()
+             ;; Remove border completely
+             (xcb:+request exwm--connection
+                 (make-instance 'xcb:ConfigureWindow
+                                :window exwm--id
+                                :value-mask xcb:ConfigWindow:BorderWidth
+                                :border-width 0))
+             (xcb:flush exwm--connection))))))))
 
 (defun exwm-update-all-borders ()
   "Update border colors for all windows based on focus."
   (when (and (fboundp 'exwm-clear-inactive-borders)
-             (fboundp 'exwm-update-top-border-color))
+             (fboundp 'exwm-update-top-border-color)
+             exwm--connection)
     (ignore-errors
       (exwm-clear-inactive-borders)
       (exwm-update-top-border-color))))
@@ -290,67 +308,138 @@
 (exwm-wm-mode)
 
 
-;; System tray setup - only start if not already running
+;; Helper functions for robust startup
+(defun my/wait-for-x11-ready ()
+  "Wait for X11 to be fully ready for operations."
+  (let ((max-attempts 50)
+        (attempt 0)
+        (ready nil))
+    (while (and (< attempt max-attempts) (not ready))
+      (condition-case nil
+          (progn
+            (x-display-pixel-width)
+            (x-display-pixel-height)
+            (setq ready t))
+        (error
+         (setq attempt (1+ attempt))
+         (sleep-for 0.1))))
+    ready))
+
+(defun my/wait-for-process-start (process-name command max-wait)
+  "Wait for a process to actually start, up to MAX-WAIT seconds."
+  (let ((start-time (float-time))
+        (started nil))
+    (while (and (< (- (float-time) start-time) max-wait)
+                (not started))
+      (when (get-process process-name)
+        (setq started t))
+      (unless started
+        (sleep-for 0.1)))
+    started))
+
+(defun my/safe-start-process (name command args)
+  "Safely start a process with error handling."
+  (condition-case err
+      (apply 'start-process name nil command args)
+    (error
+     (message "Failed to start %s: %s" name err)
+     nil)))
+
+(defun my/kill-orphaned-processes (process-pattern)
+  "Kill orphaned processes matching PROCESS-PATTERN."
+  (ignore-errors
+    (call-process "pkill" nil nil nil "-f" process-pattern)))
+
+;; System tray setup with proper dependency checking
 (defun my/start-system-tray ()
-  "Start system tray components only if they're not already running."
+  "Start system tray components with proper sequencing."
   (interactive)
-  ;; Only start trayer if it's not running
-  (unless (get-process "trayer")
-    ;; Kill any orphaned trayer processes first
-    (start-process-shell-command "kill-trayer" nil "pkill -f trayer")
-    (run-with-timer 0.3 nil (lambda ()
+  (when (my/wait-for-x11-ready)
+    ;; Start trayer first if not running
+    (unless (get-process "trayer")
+      ;; Clean up any orphaned trayer processes
+      (my/kill-orphaned-processes "trayer")
+      (sleep-for 0.2)  ; Brief pause after cleanup
+      
       (let* ((screen-width (x-display-pixel-width))
-             (tray-width (min 150 (/ screen-width 10)))  ; Adaptive width
-             (tray-height (if (> screen-width 1600) 24 20)))  ; Adaptive height
-        (start-process "trayer" nil "trayer" 
-                       "--edge" "top" "--align" "right" 
-                       "--SetDockType" "true" "--SetPartialStrut" "true"
-                       "--expand" "false" "--widthtype" "pixel" 
-                       "--width" (number-to-string tray-width)
-                       "--heighttype" "pixel" 
-                       "--height" (number-to-string tray-height)
-                       "--transparent" "true" "--alpha" "256" 
-                       "--tint" "0x00000000" "--distance" "2")))))
-  
-  ;; Start applets only if not running
-  (unless (get-process "nm-applet")
-    (start-process "nm-applet" nil "nm-applet"))
-  (unless (get-process "blueman-applet")  
-    (start-process "blueman-applet" nil "blueman-applet"))
-  (unless (get-process "dunst")
-    (start-process "dunst" nil "dunst"))
-  (unless (get-process "protonvpn-app")
-    (start-process "protonvpn-app" nil "protonvpn-app")))
+             (tray-width (min 150 (/ screen-width 10)))
+             (tray-height (if (> screen-width 1600) 24 20)))
+        (when (my/safe-start-process
+               "trayer" "trayer"
+               (list "--edge" "top" "--align" "right" 
+                     "--SetDockType" "true" "--SetPartialStrut" "true"
+                     "--expand" "false" "--widthtype" "pixel" 
+                     "--width" (number-to-string tray-width)
+                     "--heighttype" "pixel" 
+                     "--height" (number-to-string tray-height)
+                     "--transparent" "true" "--alpha" "256" 
+                     "--tint" "0x00000000" "--distance" "2"))
+          ;; Wait for trayer to be ready before starting applets
+          (my/wait-for-process-start "trayer" nil 3.0))))
+    
+    ;; Start applets sequentially, only if not already running
+    (let ((applets '(("nm-applet" . "nm-applet")
+                     ("blueman-applet" . "blueman-applet")  
+                     ("dunst" . "dunst")
+                     ("protonvpn-app" . "protonvpn-app"))))
+      (dolist (applet applets)
+        (let ((process-name (car applet))
+              (command (cdr applet)))
+          (unless (get-process process-name)
+            (my/safe-start-process process-name command nil)
+            (sleep-for 0.2)))))))  ; Small delay between applets
 
 ;; Hook system tray startup into EXWM initialization
 (add-hook 'exwm-init-hook #'my/start-system-tray)
 
-;; Set root window cursor to avoid X cursor
-(start-process-shell-command "xsetroot-cursor" nil "xsetroot -cursor_name hand2")
+;; Background services startup with dependency checking
+(defun my/start-background-services ()
+  "Start background services after X11 is ready."
+  (when (my/wait-for-x11-ready)
+    ;; Set root window cursor
+    (my/safe-start-process "xsetroot-cursor" "xsetroot" '("-cursor_name" "hand2"))
+    (sleep-for 0.1)
+    
+    ;; Start picom for compositing
+    (unless (get-process "picom")
+      (my/safe-start-process "picom" "picom" '("--vsync")))
+    (sleep-for 0.1)
+    
+    ;; Start screen lock daemon
+    (unless (get-process "xss-lock")
+      (my/safe-start-process "xss-lock" "xss-lock" '("--" "betterlockscreen" "-l")))))
 
+;; Hook background services to EXWM init
+(add-hook 'exwm-init-hook #'my/start-background-services)
 
-;; Picom
-(start-process-shell-command "picom" nil "picom --vsync")
-
-;; Auto lock screen after 10 minutes of inactivity
-(start-process-shell-command "xss-lock" nil "xss-lock -- betterlockscreen -l")
-
-;; Natural scrolling configuration
+;; Natural scrolling configuration with dependency checking
 (defun exwm-enable-natural-scrolling ()
   "Enable natural scrolling for touchpad and mouse devices."
   (interactive)
-  ;; Enable natural scrolling for touchpad
-  (start-process-shell-command 
-   "natural-scroll-touchpad" nil 
-   "xinput set-prop 'ELAN050A:01 04F3:3158 Touchpad' 'libinput Natural Scrolling Enabled' 1")
-  ;; Enable for mouse if present
-  (start-process-shell-command 
-   "natural-scroll-mouse" nil 
-   "xinput set-prop 'ELAN050A:01 04F3:3158 Mouse' 'libinput Natural Scrolling Enabled' 1 2>/dev/null || true")
-  (message "Natural scrolling enabled"))
+  (when (my/wait-for-x11-ready)
+    ;; Wait a bit for input devices to be fully initialized
+    (sleep-for 0.5)
+    ;; Enable natural scrolling for touchpad
+    (ignore-errors
+      (my/safe-start-process
+       "natural-scroll-touchpad" "xinput"
+       '("set-prop" "ELAN050A:01 04F3:3158 Touchpad" 
+         "libinput Natural Scrolling Enabled" "1")))
+    ;; Enable for mouse if present
+    (ignore-errors
+      (my/safe-start-process
+       "natural-scroll-mouse" "xinput"
+       '("set-prop" "ELAN050A:01 04F3:3158 Mouse" 
+         "libinput Natural Scrolling Enabled" "1")))
+    (message "Natural scrolling enabled")))
 
-;; Apply natural scrolling on EXWM start and make it available as command
-(add-hook 'exwm-init-hook #'exwm-enable-natural-scrolling)
+;; Delayed natural scrolling setup - wait for input subsystem
+(defun my/setup-natural-scrolling ()
+  "Set up natural scrolling after input devices are ready."
+  (run-with-idle-timer 2.0 nil #'exwm-enable-natural-scrolling))
+
+;; Apply natural scrolling after EXWM is fully initialized
+(add-hook 'exwm-init-hook #'my/setup-natural-scrolling)
 (exwm-input-set-key (kbd "s-n") #'exwm-enable-natural-scrolling)
 
 ;; Lock screen functionality
